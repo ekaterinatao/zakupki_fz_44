@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- EIS INTEGRATION_SM_TYPES Integration Scheme, version 15.1, create date 27.12.2024 -->
+<xs:schema xmlns="http://zakupki.gov.ru/oos/PFtypes/1" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:base="http://zakupki.gov.ru/oos/base/1" xmlns:cmn="http://zakupki.gov.ru/oos/common/1" targetNamespace="http://zakupki.gov.ru/oos/PFtypes/1" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xs:import namespace="http://zakupki.gov.ru/oos/base/1" schemaLocation="BaseTypes.xsd"/>
+	<xs:import namespace="http://zakupki.gov.ru/oos/common/1" schemaLocation="CommonTypes.xsd"/>
+	<!--ПФ ППА-->
+	<xs:complexType name="nondisclosureAgreementType">
+		<xs:annotation>
+			<xs:documentation>Уведомление о неразглашении сведений</xs:documentation>
+		</xs:annotation>
+		<xs:sequence>
+			<xs:element name="id" type="xs:long" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>Идентификатор документа ЕИС</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="docPublishDate" type="xs:dateTime">
+				<xs:annotation>
+					<xs:documentation>Дата размещения документа</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="customerInfo" type="cmn:organizationOptionalRegNumType">
+				<xs:annotation>
+					<xs:documentation>Информация о заказчике</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="registrationDate" type="xs:date" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>Дата постановки на учет в налоговом органе</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="OKOPFInfo" type="base:OKOPFRef" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>Организационно-правовая форма организации по ОКОПФ</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="subjectRF">
+				<xs:annotation>
+					<xs:documentation>Субъект РФ</xs:documentation>
+				</xs:annotation>
+				<xs:complexType>
+					<xs:sequence>
+						<xs:element name="code" type="base:text4Type">
+							<xs:annotation>
+								<xs:documentation>Код субъекта</xs:documentation>
+							</xs:annotation>
+						</xs:element>
+						<xs:element name="name" type="base:text100Type" minOccurs="0">
+							<xs:annotation>
+								<xs:documentation>Наименование</xs:documentation>
+							</xs:annotation>
+						</xs:element>
+					</xs:sequence>
+				</xs:complexType>
+			</xs:element>
+			<xs:element name="OKTMOInfo" type="base:OKTMORef" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>Территориально-муниципальное образование организации по ОКТМО</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="factAddress" type="base:text2000Type">
+				<xs:annotation>
+					<xs:documentation>Адрес местонахождения организации</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="personInfo">
+				<xs:annotation>
+					<xs:documentation>Информация о пользователе</xs:documentation>
+				</xs:annotation>
+				<xs:complexType>
+					<xs:sequence>
+						<xs:element name="nameInfo" type="cmn:personType">
+							<xs:annotation>
+								<xs:documentation>ФИО</xs:documentation>
+							</xs:annotation>
+						</xs:element>
+						<xs:element name="INN" type="base:innIndividualType" minOccurs="0">
+							<xs:annotation>
+								<xs:documentation>ИНН</xs:documentation>
+							</xs:annotation>
+						</xs:element>
+						<xs:element name="position" type="base:positionType" minOccurs="0">
+							<xs:annotation>
+								<xs:documentation>Должность</xs:documentation>
+							</xs:annotation>
+						</xs:element>
+					</xs:sequence>
+				</xs:complexType>
+			</xs:element>
+			<xs:element name="description" type="base:text2000Type">
+				<xs:annotation>
+					<xs:documentation>Информация о доступах</xs:documentation>
+				</xs:annotation>
+			</xs:element>
+			<xs:element name="privileges" minOccurs="0">
+				<xs:annotation>
+					<xs:documentation>Информация о полномочиях</xs:documentation>
+				</xs:annotation>
+				<xs:complexType>
+					<xs:sequence>
+						<xs:element name="privilege" maxOccurs="unbounded">
+							<xs:complexType>
+								<xs:sequence>
+									<xs:element name="privilegeName" type="base:text2000Type"/>
+								</xs:sequence>
+							</xs:complexType>
+						</xs:element>
+					</xs:sequence>
+				</xs:complexType>
+			</xs:element>
+		</xs:sequence>
+		<xs:attribute name="schemeVersion" type="base:schemeVersionType" use="required">
+			<xs:annotation>
+				<xs:documentation>Версия схемы</xs:documentation>
+			</xs:annotation>
+		</xs:attribute>
+	</xs:complexType>
+</xs:schema>
