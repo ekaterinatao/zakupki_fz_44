@@ -13,7 +13,7 @@ import sys
 import atexit
 
 
-from conn import create_conn_postgre, create_conn_psyco
+from connection import create_conn_postgre, create_conn_psyco
 from func import preproc_data, extract_region_and_year
 
 from collections import OrderedDict
@@ -269,10 +269,19 @@ def mark_zip(zip_path: str, success: bool):
     "Записывает в таблицу БД путь и текущее состояние zip файла"
     conn = create_conn_postgre()
     with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO fz_44.zip_path (path, sucsess) VALUES (%s, %s)
-            ON CONFLICT (path) DO UPDATE SET sucsess = EXCLUDED.sucsess;
-        """, (zip_path, success))
+        cur.execute("SELECT sucsess FROM fz_44.zip_path WHERE path = %s", (zip_path,))
+        result = cur.fetchone()
+
+        if result is None:
+            cur.execute(
+                "INSERT INTO fz_44.zip_path (path, sucsess) VALUES (%s, %s)",
+                (zip_path, success)
+            )
+        elif result[0] is False and success is True:
+            cur.execute(
+                "UPDATE fz_44.zip_path SET sucsess = TRUE WHERE path = %s",
+                (zip_path,)
+            )
     conn.commit()
     conn.close()
     # print('... zip path saved')
@@ -282,10 +291,19 @@ def mark_file(zip_path: str, file_path: str, success: bool):
     "Записывает в таблицу БД путь и текущее состояние xml файла"
     conn = create_conn_postgre()
     with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO fz_44.file_path (zip_path, path, sucsess) VALUES (%s, %s, %s)
-            ON CONFLICT (zip_path, path) DO UPDATE SET sucsess = EXCLUDED.sucsess;
-        """, (zip_path, file_path, success))
+        cur.execute("SELECT sucsess FROM fz_44.file_path WHERE path = %s", (file_path,))
+        result = cur.fetchone()
+
+        if result is None:
+            cur.execute(
+                "INSERT INTO fz_44.file_path (zip_path, path, sucsess) VALUES (%s, %s, %s)",
+                (zip_path, file_path, success)
+            )
+        elif result[0] is False and success is True:
+            cur.execute(
+                "UPDATE fz_44.file_path SET sucsess = TRUE WHERE path = %s",
+                (file_path,)
+            )
     conn.commit()
     conn.close()
     # print('... file path saved')
