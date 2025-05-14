@@ -172,7 +172,7 @@ class RecursiveProcessor:
                     self.global_list_tables[past_table_name].append({'uid': uid, 'parent_uid': parent_uid, 'VALUE': el})
 
 
-def create_table(list_tables: list[dict], table_name: str, schema_name: str='temp_tao'):
+def create_table(list_tables: list[dict], table_name: str, schema_name: str='fz_44'):
     "Создание таблицы в БД"
     conn = None
     try:
@@ -206,7 +206,7 @@ def create_table(list_tables: list[dict], table_name: str, schema_name: str='tem
             conn.close()
 
 
-def insert_data(list_tables: list[dict], table_name: str, schema_name: str='temp_tao'):
+def insert_data(list_tables: list[dict], table_name: str, schema_name: str='fz_44'):
     "Заполнение таблицы в БД"
     conn = None
     try:
@@ -310,25 +310,6 @@ def mark_file(zip_path: str, file_path: str, success: bool):
     # print('... file path saved')
 
 
-# def get_resume_point() -> tuple[str, bool]:
-#     """ Функция возвращает последний zip, с которого нужно начать парсинг
-#         и последний записанный файл, на котором остановились (может быть с флажком True|False)
-#     """
-#     conn = create_conn_postgre()
-#     query = sql.SQL("""
-#         SELECT f.zip_path, f.path FROM fz_44.zip_path z
-#         JOIN fz_44.file_path f ON z.path = f.zip_path
-#         WHERE z.sucsess = FALSE
-#         ORDER BY f.zip_path DESC, f.path DESC
-#         LIMIT 1;
-#     """)
-#     with conn.cursor() as cur:
-#         cur.execute(query)
-#         row = cur.fetchone()
-#     conn.close()
-#     return row if row else (None, None)
-
-
 def get_all_zip_path() -> set:
     "Получение путей всех записанных zip файлов и состояний"
     conn = create_conn_postgre()
@@ -400,8 +381,6 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
     global ssh_conn
     global psql_conn
 
-    # resume_zip, resume_file = get_resume_point()
-    # resume_mode = resume_zip is not None
     zip_path_in_bd = get_all_zip_path()
 
     with open('column.json', 'r') as f:
@@ -427,13 +406,6 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
 
                 for zip_path in tqdm(zip_files, desc=f"Обработка zip в {path}"):
                     print(f"\n--- Обработка архива: {zip_path}")
-                    # if resume_mode:
-                    #     if zip_path < resume_zip:
-                    #         continue
-                    #     elif zip_path == resume_zip:
-                    #         pass
-                    #     else:
-                    #         resume_mode = False
 
                     if zip_path in zip_path_in_bd and zip_path_in_bd[zip_path]:
                         print("Уже обработан.")
@@ -457,14 +429,6 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                     all_files_success = True
 
                     for file_path in file_list:
-                        # if resume_mode:
-                        #     if zip_path == resume_zip:
-                        #         if file_path < resume_file:
-                        #             continue
-                        #         elif file_path == resume_file:
-                        #             resume_mode = False
-                        #     else:
-                        #         resume_mode = False
 
                         if file_path in file_path_in_bd and file_path_in_bd[file_path]:
                             continue
