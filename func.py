@@ -2,6 +2,7 @@ import pandas as pd
 from collections import OrderedDict
 import re
 from typing import List, Dict
+import numpy as np
 
 
 def check_float(x) -> bool:

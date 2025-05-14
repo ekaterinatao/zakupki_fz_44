@@ -300,38 +300,40 @@ def mark_file(zip_path: str, file_path: str, success: bool):
                 (zip_path, file_path, success)
             )
         elif result[0] is False and success is True:
-            cur.execute(
-                "UPDATE fz_44.file_path SET sucsess = TRUE WHERE path = %s",
-                (file_path,)
+            cur.execute("""
+                UPDATE fz_44.file_path SET sucsess = TRUE 
+                WHERE zip_path = %s AND path = %s
+                """, (zip_path, file_path,)
             )
     conn.commit()
     conn.close()
     # print('... file path saved')
 
 
-def get_resume_point() -> tuple[str, bool]:
-    """ Функция возвращает последний zip, с которого нужно начать парсинг
-        и последний записанный файл, на котором остановились (может быть с флажком True|False)
-    """
-    conn = create_conn_postgre()
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT f.zip_path, f.path FROM fz_44.zip_path z
-            JOIN fz_44.file_path f ON z.path = f.zip_path
-            WHERE z.sucsess = FALSE
-            ORDER BY f.zip_path DESC, f.path DESC
-            LIMIT 1;
-        """)
-        row = cur.fetchone()
-    conn.close()
-    return row if row else (None, None)
+# def get_resume_point() -> tuple[str, bool]:
+#     """ Функция возвращает последний zip, с которого нужно начать парсинг
+#         и последний записанный файл, на котором остановились (может быть с флажком True|False)
+#     """
+#     conn = create_conn_postgre()
+#     query = sql.SQL("""
+#         SELECT f.zip_path, f.path FROM fz_44.zip_path z
+#         JOIN fz_44.file_path f ON z.path = f.zip_path
+#         WHERE z.sucsess = FALSE
+#         ORDER BY f.zip_path DESC, f.path DESC
+#         LIMIT 1;
+#     """)
+#     with conn.cursor() as cur:
+#         cur.execute(query)
+#         row = cur.fetchone()
+#     conn.close()
+#     return row if row else (None, None)
 
 
 def get_all_zip_path() -> set:
     "Получение путей всех записанных zip файлов и состояний"
     conn = create_conn_postgre()
     with conn.cursor() as cur:
-        cur.execute("SELECT path, sucsess FROM fz_44.zip_path")
+        cur.execute("SELECT path, sucsess FROM fz_44.zip_path ORDER BY path")
         rows = cur.fetchall()
         processed_zips = {r[0]: r[1] for r in rows} if rows else {}
     conn.close()
@@ -344,7 +346,9 @@ def get_all_file_path_in_zip(zip_path: str) -> set:
     query = sql.SQL(""" 
         SELECT f.path, f.sucsess FROM fz_44.zip_path z
         JOIN fz_44.file_path f ON z.path = f.zip_path 
-        WHERE f.zip_path = %s """)
+        WHERE f.zip_path = %s
+        ORDER BY f.zip_path, f.path
+    """)
 
     with conn.cursor() as cur:
         cur.execute(query, (zip_path,))
@@ -396,8 +400,8 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
     global ssh_conn
     global psql_conn
 
-    resume_zip, resume_file = get_resume_point()
-    resume_mode = resume_zip is not None
+    # resume_zip, resume_file = get_resume_point()
+    # resume_mode = resume_zip is not None
     zip_path_in_bd = get_all_zip_path()
 
     with open('column.json', 'r') as f:
@@ -423,19 +427,18 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
 
                 for zip_path in tqdm(zip_files, desc=f"Обработка zip в {path}"):
                     print(f"\n--- Обработка архива: {zip_path}")
-                    if resume_mode:
-                        if zip_path < resume_zip:
-                            continue
-                        elif zip_path == resume_zip:
-                            pass
-                        else:
-                            resume_mode = False
+                    # if resume_mode:
+                    #     if zip_path < resume_zip:
+                    #         continue
+                    #     elif zip_path == resume_zip:
+                    #         pass
+                    #     else:
+                    #         resume_mode = False
 
                     if zip_path in zip_path_in_bd and zip_path_in_bd[zip_path]:
                         print("Уже обработан.")
                         continue
-                    
-                    file_path_in_bd = get_all_file_path_in_zip(zip_path)
+
                     mark_zip(zip_path, False)
 
                     try:
@@ -450,17 +453,18 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                         continue
 
                     file_list = sorted([fp for fp in zf.namelist() if fp.endswith('.xml')])
+                    file_path_in_bd = get_all_file_path_in_zip(zip_path)
                     all_files_success = True
 
                     for file_path in file_list:
-                        if resume_mode:
-                            if zip_path == resume_zip:
-                                if file_path < resume_file:
-                                    continue
-                                elif file_path == resume_file:
-                                    resume_mode = False
-                            else:
-                                resume_mode = False
+                        # if resume_mode:
+                        #     if zip_path == resume_zip:
+                        #         if file_path < resume_file:
+                        #             continue
+                        #         elif file_path == resume_file:
+                        #             resume_mode = False
+                        #     else:
+                        #         resume_mode = False
 
                         if file_path in file_path_in_bd and file_path_in_bd[file_path]:
                             continue
@@ -468,6 +472,9 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                         try:
                             print(f"  -> Обработка файла: {file_path}")
                             mark_file(zip_path, file_path, False)
+                            psql_conn = create_conn_postgre()
+                            psql_conn.autocommit = False
+
                             file = zf.read(file_path)
                             parsed_file = schema.to_dict(file, validation='lax')
 
@@ -477,8 +484,6 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                                 past_key_name='', uid=str(uuid.uuid4())
                             )
 
-                            psql_conn = create_conn_postgre()
-                            psql_conn.autocommit = False
                             with psql_conn.cursor() as cur:
                                 cur.execute("BEGIN;")
 
