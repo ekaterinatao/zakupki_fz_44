@@ -206,69 +206,21 @@ def create_table(list_tables: list[dict], table_name: str, schema_name: str='fz_
             conn.close()
 
 
-def insert_data(list_tables: list[dict], table_name: str, schema_name: str='fz_44'):
-    "Заполнение таблицы в БД"
-    conn = None
-    try:
-        conn = create_conn_postgre()
-        conn.autocommit = False 
-        
-        df, df_types = preproc_data(list_tables, table_name, schema_name)
-        
-        """Вставляет данные из DataFrame в таблицу"""
-        columns = df.columns.tolist()
-        values = [tuple(row) for row in df.itertuples(index=False)]
-
-        query = sql.SQL("INSERT INTO {schema}.{table} ({cols}) VALUES ({vals})").format(
-            schema=sql.Identifier(schema_name),
-            table=sql.Identifier(table_name),
-            cols=sql.SQL(', ').join(map(sql.Identifier, columns)),
-            vals=sql.SQL(', ').join([sql.Placeholder()] * len(columns))
-        )
-
-        with conn.cursor() as cur:
-            cur.executemany(query, values)
-            conn.commit()
-        # print(f"Вставлено {len(values)} строк в {table_name}")
-
-    except Exception as e:
-        print(f"Ошибка: {e}")
-        if conn:
-            conn.rollback()
-    finally:
-        if conn:
-            conn.close()
-
-
-def check_table(table_name: str) -> bool:
+def check_table(table_name: str, connection) -> bool:
     "Проверка наличия заданной таблицы в БД"
-    cursor = create_conn_postgre().cursor()
-    cursor.execute("""
-        SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_schema = 'fz_44' AND table_name = %s
-        );
-    """, (table_name,))
-    return cursor.fetchone()[0]
+    with connection.cursor() as cur:
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'fz_44' AND table_name = %s
+            );
+        """, (table_name,))
+        return cur.fetchone()[0]
 
 
-def get_table_columns(table_name: str) -> list[str]:
-    "Получение списка колонок заданной таблицы в БД"
-    cursor = create_conn_postgre().cursor()
-    cursor.execute("""
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_schema = 'fz_44' AND table_name = %s
-        ORDER BY ordinal_position;
-    """, (table_name,))
-
-    return [row[0] for row in cursor.fetchall()]
-
-
-def mark_zip(zip_path: str, success: bool):
+def mark_zip(zip_path: str, success: bool, connection):
     "Записывает в таблицу БД путь и текущее состояние zip файла"
-    conn = create_conn_postgre()
-    with conn.cursor() as cur:
+    with connection.cursor() as cur:
         cur.execute("SELECT sucsess FROM fz_44.zip_path WHERE path = %s", (zip_path,))
         result = cur.fetchone()
 
@@ -282,15 +234,12 @@ def mark_zip(zip_path: str, success: bool):
                 "UPDATE fz_44.zip_path SET sucsess = TRUE WHERE path = %s",
                 (zip_path,)
             )
-    conn.commit()
-    conn.close()
-    # print('... zip path saved')
+    connection.commit()
 
 
-def mark_file(zip_path: str, file_path: str, success: bool):
+def mark_file(zip_path: str, file_path: str, success: bool, connection):
     "Записывает в таблицу БД путь и текущее состояние xml файла"
-    conn = create_conn_postgre()
-    with conn.cursor() as cur:
+    with connection.cursor() as cur:
         cur.execute("SELECT sucsess FROM fz_44.file_path WHERE path = %s", (file_path,))
         result = cur.fetchone()
 
@@ -305,9 +254,7 @@ def mark_file(zip_path: str, file_path: str, success: bool):
                 WHERE zip_path = %s AND path = %s
                 """, (zip_path, file_path,)
             )
-    conn.commit()
-    conn.close()
-    # print('... file path saved')
+    connection.commit()
 
 
 def get_all_zip_path() -> set:
@@ -321,21 +268,18 @@ def get_all_zip_path() -> set:
     return processed_zips
 
 
-def get_all_file_path_in_zip(zip_path: str) -> set:
+def get_all_file_path_in_zip(zip_path: str, connection) -> set:
     "Получение путей всех записанных xml файлов и состояний"
-    conn = create_conn_postgre()
     query = sql.SQL(""" 
         SELECT f.path, f.sucsess FROM fz_44.zip_path z
         JOIN fz_44.file_path f ON z.path = f.zip_path 
         WHERE f.zip_path = %s
         ORDER BY f.zip_path, f.path
     """)
-
-    with conn.cursor() as cur:
+    with connection.cursor() as cur:
         cur.execute(query, (zip_path,))
         rows = cur.fetchall()
         processed_files = {r[0]: r[1] for r in rows} if rows else {}
-    conn.close()
     return processed_files
 
 
@@ -386,8 +330,13 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
     with open('column.json', 'r') as f:
         ref_cols = json.load(f)
 
+    columns_list = {top_key: list(nested_dict.values()) for top_key, nested_dict in ref_cols.items()}
+
     try:
         ssh_conn = create_conn_psyco()
+        psql_conn = create_conn_postgre()
+        psql_conn.autocommit = False
+
         for path in remote_zip_path:
             print(path)
             try:
@@ -408,24 +357,23 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                     print(f"\n--- Обработка архива: {zip_path}")
 
                     if zip_path in zip_path_in_bd and zip_path_in_bd[zip_path]:
-                        print("Уже обработан.")
+                        print(" -> Уже обработан.")
                         continue
 
-                    mark_zip(zip_path, False)
+                    mark_zip(zip_path, False, connection=psql_conn)
 
                     try:
                         with ssh_conn.open_sftp() as sftp:
-                            print("Открытие файла по SFTP...")
                             with sftp.file(zip_path, mode='rb') as remote_file:
                                 zip_file_data = BytesIO(remote_file.read())
-                            print('zip file opened')
+                            print('--- zip file успешно открыт')
                         zf = zipfile.ZipFile(zip_file_data, 'r')
                     except Exception as e:
-                        print(f"Ошибка при чтении zip: {e}")
+                        print(f"--- Ошибка при чтении zip: {e}")
                         continue
 
                     file_list = sorted([fp for fp in zf.namelist() if fp.endswith('.xml')])
-                    file_path_in_bd = get_all_file_path_in_zip(zip_path)
+                    file_path_in_bd = get_all_file_path_in_zip(zip_path, connection=psql_conn)
                     all_files_success = True
 
                     for file_path in file_list:
@@ -434,11 +382,7 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                             continue
 
                         try:
-                            print(f"  -> Обработка файла: {file_path}")
-                            mark_file(zip_path, file_path, False)
-                            psql_conn = create_conn_postgre()
-                            psql_conn.autocommit = False
-
+                            mark_file(zip_path, file_path, False, connection=psql_conn)
                             file = zf.read(file_path)
                             parsed_file = schema.to_dict(file, validation='lax')
 
@@ -452,23 +396,22 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                                 cur.execute("BEGIN;")
 
                                 for table in processor.global_list_tables.keys():
-                                    if not check_table(table):
+                                    if not check_table(table, connection=psql_conn):
                                         continue
 
-                                    table_columns = get_table_columns(table)
                                     renamed_table = [
                                         {ref_cols.get(k, k): v for k, v in row.items()}
                                         for row in processor.global_list_tables[table]
                                     ]
                                     rows = [
-                                        OrderedDict({col: row.get(col, None) for col in table_columns}) 
+                                        OrderedDict({col: row.get(col, None) for col in columns_list[table]}) 
                                         for row in renamed_table
                                     ]
 
                                     columns = list(rows[0].keys()) if rows else []
                                     values = [tuple(d.values()) for d in rows]
 
-                                    full_table = f'{schema_name}."{table}"'
+                                    full_table = f'"{schema_name}"."{table}"'
                                     query = sql.SQL("INSERT INTO {} ({cols}) VALUES ({vals});").format(
                                         sql.SQL(full_table),
                                         cols=sql.SQL(', ').join([sql.SQL('"{}"'.format(col)) for col in columns]),
@@ -477,24 +420,22 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                                     cur.executemany(query, values)
 
                             psql_conn.commit()
-                            mark_file(zip_path, file_path, True)
+                            mark_file(zip_path, file_path, True, connection=psql_conn)
 
                         except Exception as e:
                             all_files_success = False
                             print(f"\n Ошибка: {e}")
-                            print('parent_path', path)
-                            print('path', zip_path)
-                            print('child_path', file_path)
+                            print('>parent_path', path)
+                            print('>path', zip_path)
+                            print('>child_path', file_path)
                             psql_conn.rollback()
-                        finally:
-                            if 'psql_conn' in locals():
-                                psql_conn.close()
 
                     if all_files_success:
-                        mark_zip(zip_path, True)
+                        mark_zip(zip_path, True, connection=psql_conn)
+                        print(' -> Все файлы архива успешно обработаны')
 
     except Exception as ex:
         print(f"\n{ex}")
     finally:
         ssh_conn.close()
-
+        psql_conn.close()
