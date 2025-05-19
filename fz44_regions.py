@@ -206,69 +206,63 @@ def create_table(list_tables: list[dict], table_name: str, schema_name: str='fz_
             conn.close()
 
 
-def check_table(table_name: str, connection) -> bool:
+def check_table(table_name: str, cur) -> bool:
     "Проверка наличия заданной таблицы в БД"
-    with connection.cursor() as cur:
-        cur.execute("""
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_schema = 'fz_44' AND table_name = %s
-            );
-        """, (table_name,))
-        return cur.fetchone()[0]
+    cur.execute("""
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'fz_44' AND table_name = %s
+        );
+    """, (table_name,))
+    return cur.fetchone()[0]
 
 
-def mark_zip(zip_path: str, success: bool, connection):
+def mark_zip(zip_path: str, success: bool, connection, cur):
     "Записывает в таблицу БД путь и текущее состояние zip файла"
-    with connection.cursor() as cur:
-        cur.execute("SELECT sucsess FROM fz_44.zip_path WHERE path = %s", (zip_path,))
-        result = cur.fetchone()
+    cur.execute("SELECT sucsess FROM fz_44.zip_path WHERE path = %s", (zip_path,))
+    result = cur.fetchone()
 
-        if result is None:
-            cur.execute(
-                "INSERT INTO fz_44.zip_path (path, sucsess) VALUES (%s, %s)",
-                (zip_path, success)
-            )
-        elif result[0] is False and success is True:
-            cur.execute(
-                "UPDATE fz_44.zip_path SET sucsess = TRUE WHERE path = %s",
-                (zip_path,)
-            )
+    if result is None:
+        cur.execute(
+            "INSERT INTO fz_44.zip_path (path, sucsess) VALUES (%s, %s)",
+            (zip_path, success)
+        )
+    elif result[0] is False and success is True:
+        cur.execute(
+            "UPDATE fz_44.zip_path SET sucsess = TRUE WHERE path = %s",
+            (zip_path,)
+        )
     connection.commit()
 
 
-def mark_file(zip_path: str, file_path: str, success: bool, connection):
+def mark_file(zip_path: str, file_path: str, success: bool, connection, cur):
     "Записывает в таблицу БД путь и текущее состояние xml файла"
-    with connection.cursor() as cur:
-        cur.execute("SELECT sucsess FROM fz_44.file_path WHERE path = %s", (file_path,))
-        result = cur.fetchone()
+    cur.execute("SELECT sucsess FROM fz_44.file_path WHERE path = %s", (file_path,))
+    result = cur.fetchone()
 
-        if result is None:
-            cur.execute(
-                "INSERT INTO fz_44.file_path (zip_path, path, sucsess) VALUES (%s, %s, %s)",
-                (zip_path, file_path, success)
-            )
-        elif result[0] is False and success is True:
-            cur.execute("""
-                UPDATE fz_44.file_path SET sucsess = TRUE 
-                WHERE zip_path = %s AND path = %s
-                """, (zip_path, file_path,)
-            )
+    if result is None:
+        cur.execute(
+            "INSERT INTO fz_44.file_path (zip_path, path, sucsess) VALUES (%s, %s, %s)",
+            (zip_path, file_path, success)
+        )
+    elif result[0] is False and success is True:
+        cur.execute("""
+            UPDATE fz_44.file_path SET sucsess = TRUE 
+            WHERE zip_path = %s AND path = %s
+            """, (zip_path, file_path,)
+        )
     connection.commit()
 
 
-def get_all_zip_path() -> set:
+def get_all_zip_path(cur) -> set:
     "Получение путей всех записанных zip файлов и состояний"
-    conn = create_conn_postgre()
-    with conn.cursor() as cur:
-        cur.execute("SELECT path, sucsess FROM fz_44.zip_path ORDER BY path")
-        rows = cur.fetchall()
-        processed_zips = {r[0]: r[1] for r in rows} if rows else {}
-    conn.close()
+    cur.execute("SELECT path, sucsess FROM fz_44.zip_path ORDER BY path")
+    rows = cur.fetchall()
+    processed_zips = {r[0]: r[1] for r in rows} if rows else {}
     return processed_zips
 
 
-def get_all_file_path_in_zip(zip_path: str, connection) -> set:
+def get_all_file_path_in_zip(zip_path: str, cur) -> set:
     "Получение путей всех записанных xml файлов и состояний"
     query = sql.SQL(""" 
         SELECT f.path, f.sucsess FROM fz_44.zip_path z
@@ -276,10 +270,9 @@ def get_all_file_path_in_zip(zip_path: str, connection) -> set:
         WHERE f.zip_path = %s
         ORDER BY f.zip_path, f.path
     """)
-    with connection.cursor() as cur:
-        cur.execute(query, (zip_path,))
-        rows = cur.fetchall()
-        processed_files = {r[0]: r[1] for r in rows} if rows else {}
+    cur.execute(query, (zip_path,))
+    rows = cur.fetchall()
+    processed_files = {r[0]: r[1] for r in rows} if rows else {}
     return processed_files
 
 
@@ -323,9 +316,7 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
         schema: xmlschema - схема, для всех файлов подходит: 'scheme_15_1_i1/fcsExport.xsd'
     """
     global ssh_conn
-    global psql_conn
-
-    zip_path_in_bd = get_all_zip_path()
+    global psql_conn    
 
     with open('column.json', 'r') as f:
         ref_cols = json.load(f)
@@ -334,8 +325,12 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
 
     try:
         ssh_conn = create_conn_psyco()
+        sftp = ssh_conn.open_sftp()
         psql_conn = create_conn_postgre()
+        psql_cur = psql_conn.cursor()
         psql_conn.autocommit = False
+
+        zip_path_in_bd = get_all_zip_path(cur=psql_cur)
 
         for path in remote_zip_path:
             print(path)
@@ -360,20 +355,19 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                         print(" -> Уже обработан.")
                         continue
 
-                    mark_zip(zip_path, False, connection=psql_conn)
+                    mark_zip(zip_path, False, connection=psql_conn, cur=psql_cur)
 
                     try:
-                        with ssh_conn.open_sftp() as sftp:
-                            with sftp.file(zip_path, mode='rb') as remote_file:
-                                zip_file_data = BytesIO(remote_file.read())
-                            print('--- zip file успешно открыт')
+                        with sftp.file(zip_path, mode='rb') as remote_file:
+                            zip_file_data = BytesIO(remote_file.read())
+                        print('--- zip file успешно открыт')
                         zf = zipfile.ZipFile(zip_file_data, 'r')
                     except Exception as e:
                         print(f"--- Ошибка при чтении zip: {e}")
                         continue
 
                     file_list = sorted([fp for fp in zf.namelist() if fp.endswith('.xml')])
-                    file_path_in_bd = get_all_file_path_in_zip(zip_path, connection=psql_conn)
+                    file_path_in_bd = get_all_file_path_in_zip(zip_path, cur=psql_cur)
                     all_files_success = True
 
                     for file_path in file_list:
@@ -382,7 +376,7 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                             continue
 
                         try:
-                            mark_file(zip_path, file_path, False, connection=psql_conn)
+                            mark_file(zip_path, file_path, False, connection=psql_conn, cur=psql_cur)
                             file = zf.read(file_path)
                             parsed_file = schema.to_dict(file, validation='lax')
 
@@ -392,35 +386,34 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                                 past_key_name='', uid=str(uuid.uuid4())
                             )
 
-                            with psql_conn.cursor() as cur:
-                                cur.execute("BEGIN;")
+                            psql_cur.execute("BEGIN;")
 
-                                for table in processor.global_list_tables.keys():
-                                    if not check_table(table, connection=psql_conn):
-                                        continue
+                            for table in processor.global_list_tables.keys():
+                                if not check_table(table, cur=psql_cur):
+                                    continue
 
-                                    renamed_table = [
-                                        {ref_cols.get(k, k): v for k, v in row.items()}
-                                        for row in processor.global_list_tables[table]
-                                    ]
-                                    rows = [
-                                        OrderedDict({col: row.get(col, None) for col in columns_list[table]}) 
-                                        for row in renamed_table
-                                    ]
+                                renamed_table = [
+                                    {ref_cols.get(k, k): v for k, v in row.items()}
+                                    for row in processor.global_list_tables[table]
+                                ]
+                                rows = [
+                                    OrderedDict({col: row.get(col, None) for col in columns_list[table]}) 
+                                    for row in renamed_table
+                                ]
 
-                                    columns = list(rows[0].keys()) if rows else []
-                                    values = [tuple(d.values()) for d in rows]
+                                columns = list(rows[0].keys()) if rows else []
+                                values = [tuple(d.values()) for d in rows]
 
-                                    full_table = f'"{schema_name}"."{table}"'
-                                    query = sql.SQL("INSERT INTO {} ({cols}) VALUES ({vals});").format(
-                                        sql.SQL(full_table),
-                                        cols=sql.SQL(', ').join([sql.SQL('"{}"'.format(col)) for col in columns]),
-                                        vals=sql.SQL(', ').join([sql.Placeholder()] * len(columns))
-                                    )
-                                    cur.executemany(query, values)
+                                full_table = f'"{schema_name}"."{table}"'
+                                query = sql.SQL("INSERT INTO {} ({cols}) VALUES ({vals});").format(
+                                    sql.SQL(full_table),
+                                    cols=sql.SQL(', ').join([sql.SQL('"{}"'.format(col)) for col in columns]),
+                                    vals=sql.SQL(', ').join([sql.Placeholder()] * len(columns))
+                                )
+                                psql_cur.executemany(query, values)
 
                             psql_conn.commit()
-                            mark_file(zip_path, file_path, True, connection=psql_conn)
+                            mark_file(zip_path, file_path, True, connection=psql_conn, cur=psql_cur)
 
                         except Exception as e:
                             all_files_success = False
@@ -431,7 +424,7 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                             psql_conn.rollback()
 
                     if all_files_success:
-                        mark_zip(zip_path, True, connection=psql_conn)
+                        mark_zip(zip_path, True, connection=psql_conn, cur=psql_cur)
                         print(' -> Все файлы архива успешно обработаны')
 
     except Exception as ex:
