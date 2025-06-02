@@ -12,11 +12,8 @@ import signal
 import sys
 import atexit
 
-
 from connection import create_conn_postgre, create_conn_psyco
 from func import preproc_data, extract_region_and_year
-
-from collections import OrderedDict
 
 
 def get_region_contract_path(year_start: int, year_end: str, parent_folder: str, doc_type: str) -> list[str]:
@@ -206,15 +203,13 @@ def create_table(list_tables: list[dict], table_name: str, schema_name: str='fz_
             conn.close()
 
 
-def check_table(table_name: str, cur) -> bool:
+def check_table(cur) -> set:
     "Проверка наличия заданной таблицы в БД"
     cur.execute("""
-        SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_schema = 'fz_44' AND table_name = %s
-        );
-    """, (table_name,))
-    return cur.fetchone()[0]
+        SELECT table_name FROM information_schema.tables 
+        WHERE table_schema = 'fz_44';
+    """)
+    return {row[0] for row in cur.fetchall()}
 
 
 def mark_zip(zip_path: str, success: bool, connection, cur):
@@ -330,6 +325,7 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
         psql_cur = psql_conn.cursor()
         psql_conn.autocommit = False
 
+        existing_tables = check_table(cur=psql_cur)
         zip_path_in_bd = get_all_zip_path(cur=psql_cur)
 
         for path in remote_zip_path:
@@ -358,74 +354,86 @@ def load_xml_to_bd(remote_zip_path: list[str], schema: xmlschema, schema_name: s
                     mark_zip(zip_path, False, connection=psql_conn, cur=psql_cur)
 
                     try:
-                        with sftp.file(zip_path, mode='rb') as remote_file:
-                            zip_file_data = BytesIO(remote_file.read())
-                        print('--- zip file успешно открыт')
-                        zf = zipfile.ZipFile(zip_file_data, 'r')
+
+                        with BytesIO() as zip_buffer:
+                            sftp.getfo(zip_path, zip_buffer)
+                            zip_buffer.seek(0)
+                            if zipfile.is_zipfile(zip_buffer):
+
+                                with zipfile.ZipFile(zip_buffer, 'r') as zf:
+                                    print('--- zip file успешно открыт')
+
+                                    file_path_in_bd = get_all_file_path_in_zip(zip_path, cur=psql_cur)
+                                    all_files_success = True
+
+                                    for file_path in zf.namelist():
+                                        if not file_path.lower().endswith('.xml'):
+                                            continue
+
+                                        if file_path in file_path_in_bd and file_path_in_bd[file_path]:
+                                            continue
+
+                                        try:
+                                            mark_file(zip_path, file_path, False, connection=psql_conn, cur=psql_cur)
+                                            file = zf.read(file_path)
+                                            file_str = file.decode('utf-8')
+
+                                            if file_str:
+                                                parsed_file = schema.to_dict(file_str, validation='lax')
+
+                                                processor = RecursiveProcessor()
+                                                processor.cicle_parsing(
+                                                    data=parsed_file[0], past_table_name='', 
+                                                    past_key_name='', uid=str(uuid.uuid4())
+                                                )
+
+                                                psql_cur.execute("BEGIN;")
+
+                                                for table in processor.global_list_tables.keys():
+                                                    if table not in existing_tables:
+                                                        continue
+
+                                                    renamed_table = [
+                                                        {ref_cols.get(k, k): v for k, v in row.items()}
+                                                        for row in processor.global_list_tables[table]
+                                                    ]
+                                                    target_columns = columns_list[table]
+                                                    rows = [
+                                                        {col: row.get(col, None) for col in target_columns} 
+                                                        for row in renamed_table
+                                                    ]
+
+                                                    values = [tuple(row[col] for col in target_columns) for row in rows]
+                                                    
+                                                    if not values:
+                                                        continue
+
+                                                    full_table = f'"{schema_name}"."{table}"'
+                                                    query = sql.SQL("INSERT INTO {} ({cols}) VALUES ({vals});").format(
+                                                        sql.SQL(full_table),
+                                                        cols=sql.SQL(', ').join([sql.SQL('"{}"'.format(col)) for col in target_columns]),
+                                                        vals=sql.SQL(', ').join([sql.Placeholder()] * len(target_columns))
+                                                    )
+                                                    psql_cur.executemany(query, values)
+
+                                                psql_conn.commit()
+                                                mark_file(zip_path, file_path, True, connection=psql_conn, cur=psql_cur)
+
+                                        except Exception as e:
+                                            all_files_success = False
+                                            print(f"\n Ошибка: {e}")
+                                            print('>parent_path', path)
+                                            print('>path', zip_path)
+                                            print('>child_path', file_path)
+                                            psql_conn.rollback()
+
+                                    if all_files_success:
+                                        mark_zip(zip_path, True, connection=psql_conn, cur=psql_cur)
+                                        print(' -> Все файлы архива успешно обработаны')
+
                     except Exception as e:
                         print(f"--- Ошибка при чтении zip: {e}")
                         continue
-
-                    file_list = sorted([fp for fp in zf.namelist() if fp.endswith('.xml')])
-                    file_path_in_bd = get_all_file_path_in_zip(zip_path, cur=psql_cur)
-                    all_files_success = True
-
-                    for file_path in file_list:
-
-                        if file_path in file_path_in_bd and file_path_in_bd[file_path]:
-                            continue
-
-                        try:
-                            mark_file(zip_path, file_path, False, connection=psql_conn, cur=psql_cur)
-                            file = zf.read(file_path)
-                            parsed_file = schema.to_dict(file, validation='lax')
-
-                            processor = RecursiveProcessor()
-                            processor.cicle_parsing(
-                                data=parsed_file[0], past_table_name='', 
-                                past_key_name='', uid=str(uuid.uuid4())
-                            )
-
-                            psql_cur.execute("BEGIN;")
-
-                            for table in processor.global_list_tables.keys():
-                                if not check_table(table, cur=psql_cur):
-                                    continue
-
-                                renamed_table = [
-                                    {ref_cols.get(k, k): v for k, v in row.items()}
-                                    for row in processor.global_list_tables[table]
-                                ]
-                                rows = [
-                                    OrderedDict({col: row.get(col, None) for col in columns_list[table]}) 
-                                    for row in renamed_table
-                                ]
-
-                                columns = list(rows[0].keys()) if rows else []
-                                values = [tuple(d.values()) for d in rows]
-
-                                full_table = f'"{schema_name}"."{table}"'
-                                query = sql.SQL("INSERT INTO {} ({cols}) VALUES ({vals});").format(
-                                    sql.SQL(full_table),
-                                    cols=sql.SQL(', ').join([sql.SQL('"{}"'.format(col)) for col in columns]),
-                                    vals=sql.SQL(', ').join([sql.Placeholder()] * len(columns))
-                                )
-                                psql_cur.executemany(query, values)
-
-                            psql_conn.commit()
-                            mark_file(zip_path, file_path, True, connection=psql_conn, cur=psql_cur)
-
-                        except Exception as e:
-                            all_files_success = False
-                            print(f"\n Ошибка: {e}")
-                            print('>parent_path', path)
-                            print('>path', zip_path)
-                            print('>child_path', file_path)
-                            psql_conn.rollback()
-
-                    if all_files_success:
-                        mark_zip(zip_path, True, connection=psql_conn, cur=psql_cur)
-                        print(' -> Все файлы архива успешно обработаны')
 
     except Exception as ex:
         print(f"\n{ex}")
